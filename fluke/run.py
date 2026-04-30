@@ -15,7 +15,8 @@ sys.path.append(".")
 
 from . import __version__  # NOQA
 from .config import Configuration, ConfigurationError, OptimizerConfigurator  # NOQA
-from .utils import get_class_from_qualified_name, get_loss, get_model, plot_distribution  # NOQA
+from .utils import get_class_from_qualified_name, get_loss, get_model, plot_distribution, get_full_classname  # NOQA
+from .algorithms.decentralized import Topology, DecentralizedFL  # NOQA
 
 console = Console()
 app = typer.Typer()
@@ -201,8 +202,18 @@ def _run_federation(cfg: Configuration, resume: str | None = None, show_dist: bo
         **cfg.data.exclude("dataset", "distribution"),
     )
 
+    fl_topology = Topology.build(
+        name=cfg.protocol.topology.name,
+        num_nodes=cfg.protocol.n_clients,
+        params=cfg.protocol.topology.params,
+    )
+
     fl_algo_class = get_class_from_qualified_name(cfg.method.name)
-    fl_algo = fl_algo_class(cfg.protocol.n_clients, data_splitter, cfg.method.hyperparameters)
+
+    if issubclass(fl_algo_class, DecentralizedFL):
+        fl_algo = fl_algo_class(cfg.protocol.n_clients, data_splitter, cfg.method.hyperparameters, fl_topology)
+    else:
+        fl_algo = fl_algo_class(cfg.protocol.n_clients, data_splitter, cfg.method.hyperparameters)
 
     if cfg.save and cfg.save.path:
         path = f"{cfg.save.path}_{fl_algo.id}"

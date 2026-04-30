@@ -289,6 +289,29 @@ class Configuration(DDict):
                 },
                 "n_clients": {"type": "integer", "required": True, "min": 1},
                 "n_rounds": {"type": "integer", "required": True, "min": 1},
+                "topology": {
+                    "type": "dict",
+                    "required": False,
+                    "default": {"name": "fully_connected"},
+                    "schema": {
+                        "name": {
+                            "type": "string",
+                            "required": True,
+                            "allowed": ["fully_connected", "ring", "random", "custom"]
+                        },
+                        "topology_name": {
+                            "type": "string",
+                            "required": False,
+                            "dependencies": {"name": "custom"},
+                        },
+                        "params": {
+                            "type": "dict",
+                            "required": False,
+                            "default": {},
+                            "allow_unknown": True
+                        },
+                    }
+                }
             },
         },
         "method": {

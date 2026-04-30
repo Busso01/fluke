@@ -11,6 +11,7 @@ from ...client import Client  # NOQA
 from ...comm import TimedMessage  # NOQA
 from ...config import OptimizerConfigurator  # NOQA
 from ...data import DataLoader, FastDataLoader  # NOQA
+from ...utils.log import Log
 from ...utils.model import safe_load_state_dict, aggregate_models  # NOQA
 
 __all__ = ["AbstractDFLClient", "GossipClient"]
@@ -80,8 +81,34 @@ class AbstractDFLClient(Client):
             bool: True if the client is active, False otherwise.
         """
         if iter not in self._active_history:
-            self._active_history[iter] = np.random.rand() < self.hyper_params.activation_rate
+            if iter == 0 or (iter - 1) not in self._active_history:
+                is_now_active = np.random.rand() < self.hyper_params.activation_rate
+            else:
+                was_active = self._active_history[iter - 1]
+                p_stay_active = 0.80
+                p_wake_up = 0.20
+
+                if was_active:
+                    is_now_active = np.random.rand() < p_stay_active
+                else:
+                    is_now_active = np.random.rand() < p_wake_up
+
+            self._active_history[iter] = is_now_active
+
         return self._active_history[iter]
+
+    # def is_active(self, iter: int) -> bool:
+    #     """Check if the client is active in the current iteration.
+    #
+    #     Args:
+    #         iter (int): The current iteration number.
+    #
+    #     Returns:
+    #         bool: True if the client is active, False otherwise.
+    #     """
+    #     if iter not in self._active_history:
+    #         self._active_history[iter] = np.random.rand() < self.hyper_params.activation_rate
+    #     return self._active_history[iter]
 
     def send_model(self, *args, **kwargs) -> None:
         raise NotImplementedError()

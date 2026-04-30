@@ -23,7 +23,7 @@ from ...utils import (
     ClientObserver,
     FederationObserver,
     get_loss,
-    get_model,
+    get_model, get_class_from_qualified_name,
 )  # NOQA
 from .client import AbstractDFLClient, GossipClient  # NOQA
 
@@ -37,6 +37,57 @@ class Topology:
     the clients, and the edges represent the communication links between the clients.
     The graph can be directed or undirected, depending on the use case.
     """
+
+    @staticmethod
+    def build(name: str, num_nodes: int, params: dict = None) -> 'Topology':
+        """
+        Builds a topology instance using the specified topology type, number of nodes,
+        and optional parameters. This method dynamically selects a topology-building
+        function based on the provided topology name.
+
+        Args:
+            name (str): The name of the topology to build. It must correspond to a
+                defined topology-generating function within the Topology class.
+            num_nodes (int): The number of nodes for the topology.
+            params (dict, optional): A dictionary of additional parameters to configure
+                the topology. Default is an empty dictionary.
+
+        Returns:
+            Topology: An instance of the specified topology.
+
+        Raises:
+            ValueError: If the specified topology name does not match any defined
+                topology-generating function within the Topology class.
+            TypeError: If the provided additional parameters are not valid for the
+                specified topology type.
+        """
+        if params is None:
+            params = {}
+
+        if name == "custom":
+            custom_topology = params.pop("topology_name", None)
+            if not custom_topology:
+                raise ValueError("For 'custom' topology, 'topology_name' must be provided in params.")
+
+            try:
+                custom_topology_func = get_class_from_qualified_name(custom_topology)
+            except Exception as e:
+                raise ImportError(f"Error while loading the custom function '{custom_topology}': {e}")
+
+            if isinstance(custom_topology_func, Topology):
+                return custom_topology(num_nodes=num_nodes, **params)
+            else:
+                raise TypeError(f"The custom function must return a Topology.")
+
+        try:
+            topology_func = getattr(Topology, name)
+        except AttributeError:
+            raise ValueError(f"Topology '{name}' not supported or not defined.")
+
+        try:
+            return topology_func(num_nodes=num_nodes, **params)
+        except TypeError as e:
+            raise TypeError(f"Parameters not valid for topology '{name}'. Details: {e}")
 
     @staticmethod
     def fully_connected(num_nodes: int) -> Topology:
@@ -76,6 +127,7 @@ class Topology:
         Returns:
             Topology: A random d-regular graph.
         """
+
         return Topology(networkx.random_regular_graph(d=int(p * num_nodes), n=num_nodes))
 
     def __init__(self, graph: networkx.Graph):
