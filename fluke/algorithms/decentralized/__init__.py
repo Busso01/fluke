@@ -65,9 +65,9 @@ class Topology:
             params = {}
 
         if name == "custom":
-            custom_topology = params.pop("topology_name", None)
+            custom_topology = params.pop("topology_func", None)
             if not custom_topology:
-                raise ValueError("For 'custom' topology, 'topology_name' must be provided in params.")
+                raise ValueError("For 'custom' topology, 'topology_func' must be provided in params.")
 
             try:
                 custom_topology_func = get_class_from_qualified_name(custom_topology)

@@ -299,7 +299,7 @@ class Configuration(DDict):
                             "required": True,
                             "allowed": ["fully_connected", "ring", "random", "custom"]
                         },
-                        "topology_name": {
+                        "topology_func": {
                             "type": "string",
                             "required": False,
                             "dependencies": {"name": "custom"},

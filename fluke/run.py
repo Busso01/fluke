@@ -202,15 +202,15 @@ def _run_federation(cfg: Configuration, resume: str | None = None, show_dist: bo
         **cfg.data.exclude("dataset", "distribution"),
     )
 
-    fl_topology = Topology.build(
-        name=cfg.protocol.topology.name,
-        num_nodes=cfg.protocol.n_clients,
-        params=cfg.protocol.topology.params,
-    )
-
     fl_algo_class = get_class_from_qualified_name(cfg.method.name)
 
     if issubclass(fl_algo_class, DecentralizedFL):
+        fl_topology = Topology.build(
+            name=cfg.protocol.topology.name,
+            num_nodes=cfg.protocol.n_clients,
+            params=cfg.protocol.topology.params,
+        )
+
         fl_algo = fl_algo_class(cfg.protocol.n_clients, data_splitter, cfg.method.hyperparameters, fl_topology)
     else:
         fl_algo = fl_algo_class(cfg.protocol.n_clients, data_splitter, cfg.method.hyperparameters)
