@@ -130,6 +130,20 @@ class Topology:
 
         return Topology(networkx.random_regular_graph(d=int(p * num_nodes), n=num_nodes))
 
+    @staticmethod
+    def tree(num_nodes: int) -> Topology:
+        """Create a tree topology graph with num_nodes nodes.
+
+        Args:
+            num_nodes (int): The number of nodes in the graph.
+
+        Returns:
+            Topology: A tree topology graph.
+        """
+        graph = networkx.random_labeled_tree(num_nodes)
+        return Topology(graph)
+
+
     def __init__(self, graph: networkx.Graph):
         self.graph: networkx.Graph = graph
 
