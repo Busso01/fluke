@@ -211,6 +211,8 @@ def _run_federation(cfg: Configuration, resume: str | None = None, show_dist: bo
             params=cfg.protocol.topology.params,
         )
 
+        fl_topology.draw()
+
         fl_algo = fl_algo_class(cfg.protocol.n_clients, data_splitter, cfg.method.hyperparameters, fl_topology)
     else:
         fl_algo = fl_algo_class(cfg.protocol.n_clients, data_splitter, cfg.method.hyperparameters)

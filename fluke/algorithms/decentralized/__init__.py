@@ -140,7 +140,7 @@ class Topology:
         Returns:
             Topology: A tree topology graph.
         """
-        graph = networkx.random_labeled_tree(num_nodes)
+        graph = networkx.barabasi_albert_graph(num_nodes, 1)
         return Topology(graph)
 
 
