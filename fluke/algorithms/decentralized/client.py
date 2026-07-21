@@ -342,8 +342,6 @@ class ProxyClient(AbstractDFLClient):
 
                 if self.hyper_params.get("clipping", 0) > 0:
                     torch.nn.utils.clip_grad_norm_(self.proxy_model.parameters(), self.hyper_params["clipping"])
-                    # La privacy differenziale richiederà di iniettare rumore gaussiano qui,
-                    # idealmente agganciando l'optimizer del proxy a un framework DP come Opacus.
 
                 self.optimizer.step()
                 self.proxy_optimizer.step()
