@@ -4,17 +4,21 @@ from random import choice
 from typing import Generator, Literal
 
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as f
 from torch.nn import Module
 
 from ... import FlukeENV  # NOQA
 from ...client import Client  # NOQA
-from ...comm import TimedMessage  # NOQA
+from ...comm import TimedMessage, Message  # NOQA
 from ...config import OptimizerConfigurator  # NOQA
 from ...data import DataLoader, FastDataLoader  # NOQA
+from ...utils import clear_cuda_cache
 from ...utils.log import Log
 from ...utils.model import safe_load_state_dict, aggregate_models  # NOQA
 
-__all__ = ["AbstractDFLClient", "GossipClient"]
+__all__ = ["AbstractDFLClient", "GossipClient", "ProxyClient"]
 
 
 class AbstractDFLClient(Client):
@@ -252,3 +256,149 @@ class GossipClient(AbstractDFLClient):
 
         self._num_updates = updates
         safe_load_state_dict(self.model, selected_model.state_dict())
+
+class ProxyClient(AbstractDFLClient):
+    """A client for decentralized federated learning using proxy protocol.
+
+        In the proxy protocol, clients send their model to a randomly chosen neighbor. Upon
+        receiving models from neighbors, the client applies a specified policy to update its model.
+
+        In case of ties, the last model processed in the order of receipt is chosen.
+
+        Args:
+            *args: Positional arguments passed to the parent class.
+
+            **kwargs: Keyword arguments passed to the parent class.
+
+        Raises:
+            AssertionError: If the provided policy is not one of the allowed values.
+        """
+
+    def __init__(
+        self,
+        *args,
+        proxy_model: Module,
+        alpha: float = 0.5,
+        beta: float = 0.5,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+
+        self.proxy_model = proxy_model
+        self.alpha = alpha
+        self.beta = beta
+        self.kl_loss = nn.KLDivLoss(reduction='batchmean')
+        self.pushsum_weight = 1.0
+
+        self.proxy_optimizer = self.optimizer
+
+        if "eta" in kwargs:
+            self.hyper_params.update(eta=kwargs["eta"])
+        else:
+            self.hyper_params.update(eta=1.0)
+
+    def fit(self, override_local_epochs: int = 0) -> float:
+        self.model.train()
+        self.proxy_model.train()
+
+        device = next(self.model.parameters()).device
+
+        epochs: int = (
+            override_local_epochs if override_local_epochs > 0 else self.hyper_params.local_epochs
+        )
+
+        if self.optimizer is None:
+            self.optimizer, self.scheduler = self._optimizer_cfg(self.model)
+
+        loss_private = 0.0
+        loss_proxy = 0.0
+        for epoch in range(epochs):
+            for batch_idx, (data, target) in enumerate(self.train_set):
+                data, target = data.to(device), target.to(device)
+
+                self.optimizer.zero_grad()
+                self.proxy_optimizer.zero_grad()
+
+                private_logits = self.model(data)
+                proxy_logits = self.proxy_model(data)
+
+                private_log_probs = f.log_softmax(private_logits, dim=1)
+                private_probs = f.softmax(private_logits, dim=1)
+
+                proxy_log_probs = f.log_softmax(proxy_logits, dim=1)
+                proxy_probs = f.softmax(proxy_logits, dim=1)
+
+                ce_private = self.hyper_params.loss_fn(private_logits, target)
+                ce_proxy = self.hyper_params.loss_fn(proxy_logits, target)
+
+                kl_proxy_to_private = self.kl_loss(proxy_log_probs, private_probs.detach())
+                kl_private_to_proxy = self.kl_loss(private_log_probs, proxy_probs.detach())
+
+                loss_private = (1 - self.alpha) * ce_private + self.alpha * kl_private_to_proxy
+                loss_proxy = (1 - self.beta) * ce_proxy + self.beta * kl_proxy_to_private
+
+                loss_private.backward()
+                loss_proxy.backward()
+
+                if self.hyper_params.get("clipping", 0) > 0:
+                    torch.nn.utils.clip_grad_norm_(self.proxy_model.parameters(), self.hyper_params["clipping"])
+                    # La privacy differenziale richiederà di iniettare rumore gaussiano qui,
+                    # idealmente agganciando l'optimizer del proxy a un framework DP come Opacus.
+
+                self.optimizer.step()
+                self.proxy_optimizer.step()
+
+        clear_cuda_cache()
+        return loss_private
+
+    def send_model(self) -> None:
+        if not self.neighbours:
+            return
+
+        out_degree = len(self.neighbours)
+        fraction = 1.0 / (out_degree + 1)
+
+        self.pushsum_weight *= fraction
+
+        proxy_state_dict = self.proxy_model.state_dict()
+        message_weights = {}
+        for key, value in proxy_state_dict.items():
+            message_weights[key] = value.clone() * fraction
+            proxy_state_dict[key] = proxy_state_dict[key] * fraction
+
+        self.proxy_model.load_state_dict(proxy_state_dict)
+
+        payload = {
+            "proxy_weights": message_weights,
+            "pushsum_weight": self.pushsum_weight
+        }
+
+        for neighbor in self.neighbours:
+            self.channel.send(Message(
+                payload, "model", self.index, inmemory=True,
+            ), neighbor)
+
+    def receive_model(self) -> None:
+        messages = self.channel.receive_all(self.index, "model")
+
+        if not messages:
+            return
+
+        proxy_state_dict = self.proxy_model.state_dict()
+
+        for msg in messages:
+            payload = msg.payload
+
+            received_weights = payload["proxy_weights"]
+            received_pushsum = payload["pushsum_weight"]
+
+            self.pushsum_weight += received_pushsum
+
+            for key in proxy_state_dict.keys():
+                proxy_state_dict[key] += received_weights[key]
+
+        debiased_state_dict = {}
+        for key in proxy_state_dict.keys():
+            debiased_state_dict[key] = proxy_state_dict[key] / self.pushsum_weight
+
+        self.proxy_model.load_state_dict(debiased_state_dict)

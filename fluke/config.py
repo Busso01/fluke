@@ -232,7 +232,7 @@ class Configuration(DDict):
                 },
             },
         },
-        "exp": {
+        "exp": { 
             "type": "dict",
             "schema": {
                 "device": {
