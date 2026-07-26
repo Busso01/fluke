@@ -36,6 +36,9 @@ __all__ = [
     "CifarConv2",
     "CifarConv2_E",
     "CifarConv2_D",
+    "CNN1",
+    "CNN2",
+    "MLP",
     "ResNet9",
     "ResNet9_E",
     "ResNet9_D",
@@ -1087,7 +1090,7 @@ class LeNet5_E(nn.Module):
     def __init__(self):
         super(LeNet5_E, self).__init__()
         self.layer1 = nn.Sequential(
-            nn.Conv2d(3, 6, kernel_size=5, stride=1, padding=0),
+            nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=0),
             nn.BatchNorm2d(6),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
@@ -1100,6 +1103,15 @@ class LeNet5_E(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        # Added to support MNIST dataset
+        if x.dim() == 4 and x.shape[0] == 1:
+            x = x.squeeze(0)
+
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
+
+
         out = self.layer1(x)
         out = self.layer2(out)
         out = out.reshape(out.size(0), -1)
@@ -1119,7 +1131,12 @@ class LeNet5_D(nn.Module):
 
     def __init__(self, output_size: int = 10):
         super(LeNet5_D, self).__init__()
-        self.fc = nn.Linear(400, 120)
+
+        # Modified to support MNiST Dataset ()
+        self.fc_shape = 16 * 4 * 4
+        self.fc = nn.Linear(self.fc_shape, 120)
+
+        # self.fc = nn.Linear(400, 120)
         self.relu = nn.ReLU()
         self.fc1 = nn.Linear(120, 84)
         self.relu1 = nn.ReLU()
@@ -1288,3 +1305,57 @@ class MoonCNN(EncoderHeadNet):
 
     def __init__(self, output_size: int = 10):
         super(MoonCNN, self).__init__(MoonCNN_E(), MoonCNN_D(output_size))
+
+
+# Nets added for testing purposes
+
+class CNN1(nn.Module):
+
+    def __init__(self, in_channel: int = 3, output_size: int = 10):
+        super(CNN1, self).__init__()
+        self.conv1 = nn.Conv2d(in_channel, 6, 3)
+        self.conv2 = nn.Conv2d(6, 16, 3)
+        # reshape for both MNIST and CIFAR based on # of channels
+        self.fc_shape = 16 * int(4.5 + in_channel * 0.5) * int(4.5 + in_channel * 0.5)
+        self.fc1 = nn.Linear(self.fc_shape, 64)
+        self.fc2 = nn.Linear(64, output_size)
+
+    def forward(self, x):
+        x = F.max_pool2d(F.relu(self.conv1(x)), 2)
+        x = F.max_pool2d(F.relu(self.conv2(x)), 2)
+        x = x.view(-1, self.fc_shape)
+        x = F.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+
+class CNN2(nn.Module):
+
+    def __init__(self, in_channel: int = 3, output_size: int = 10):
+        super(CNN2, self).__init__()
+        self.conv1 = nn.Conv2d(3, 128, 3)
+        self.conv2 = nn.Conv2d(128, 128, 3)
+        self.fc_shape = 128 * int(4.5 + in_channel * 0.5) * int(4.5 + in_channel * 0.5)
+        self.fc = nn.Linear(self.fc_shape, output_size)
+
+    def forward(self, x):
+        x = F.max_pool2d(F.relu(self.conv1(x)), 2)
+        x = F.max_pool2d(F.relu(self.conv2(x)), 2)
+        x = x.view(-1, self.fc_shape)
+        x = self.fc(x)
+        return x
+
+class MLP(nn.Module):
+
+    def __init__(self, output_size: int = 10):
+        super(MLP, self).__init__()
+        self.fc1 = nn.Linear(784, 200)
+        self.fc2 = nn.Linear(200, 200)
+        self.fc3 = nn.Linear(200, output_size)
+
+    def forward(self, x):
+        x = x.view(-1, 784)
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
