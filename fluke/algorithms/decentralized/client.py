@@ -8,14 +8,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as f
 from torch.nn import Module
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
 
-from ... import FlukeENV  # NOQA
+from ... import FlukeENV, FlukeCache  # NOQA
 from ...client import Client  # NOQA
 from ...comm import TimedMessage, Message  # NOQA
 from ...config import OptimizerConfigurator  # NOQA
 from ...data import DataLoader, FastDataLoader  # NOQA
-from ...utils import clear_cuda_cache
-from ...utils.log import Log
+from ...utils import clear_cuda_cache, get_model, retrieve_obj
 from ...utils.model import safe_load_state_dict, aggregate_models  # NOQA
 
 __all__ = ["AbstractDFLClient", "GossipClient", "ProxyClient"]
@@ -258,44 +259,98 @@ class GossipClient(AbstractDFLClient):
         safe_load_state_dict(self.model, selected_model.state_dict())
 
 class ProxyClient(AbstractDFLClient):
-    """A client for decentralized federated learning using proxy protocol.
+    """A client for decentralized federated learning using the ProxyFL protocol.
 
-        In the proxy protocol, clients send their model to a randomly chosen neighbor. Upon
-        receiving models from neighbors, the client applies a specified policy to update its model.
+    In ProxyFL, each client maintains two distinct models: a private model and a proxy model.
+    The private model is kept strictly local, allowing for model heterogeneity across clients.
+    The proxy model acts as the communication interface. During local training, both models
+    learn from each other using Deep Mutual Learning (DML), combining standard loss with
+    Kullback-Leibler (KL) divergence.
 
-        In case of ties, the last model processed in the order of receipt is chosen.
+    To aggregate knowledge, clients exchange fractions of their proxy model parameters along
+    with a scalar weight using the PushSum protocol.
 
-        Args:
-            *args: Positional arguments passed to the parent class.
+    Args:
+        *args: Positional arguments passed to the parent class.
+        proxy_model (Module): The common architecture model to be shared with neighbours.
+        proxy_optimizer (OptimizerConfigurator): The optimizer configuration for the proxy model.
+        alpha (float): The DML weight for the KL divergence loss of the private model. Defaults to 0.5.
+        beta (float): The DML weight for the KL divergence loss of the proxy model. Defaults to 0.5.
+        noise_multiplier (float): The noise level for Differential Privacy applied to the proxy model. Defaults to 1.0.
+        **kwargs: Keyword arguments passed to the parent class .
 
-            **kwargs: Keyword arguments passed to the parent class.
-
-        Raises:
-            AssertionError: If the provided policy is not one of the allowed values.
-        """
+    Raises:
+        ImportError: If gradient clipping is enabled (clipping > 0) but the 'opacus' library is not installed.
+    """
 
     def __init__(
         self,
         *args,
-        proxy_model: Module,
         alpha: float = 0.5,
         beta: float = 0.5,
+        proxy_model: Module,
+        proxy_optimizer: OptimizerConfigurator,
         **kwargs
     ):
         super().__init__(*args, **kwargs)
 
-        self.proxy_model = proxy_model
         self.alpha = alpha
         self.beta = beta
         self.kl_loss = nn.KLDivLoss(reduction='batchmean')
-        self.pushsum_weight = 1.0
-
-        self.proxy_optimizer = self.optimizer
+        self.pushsum_weight = 0.5
+        self._proxy_optimizer_cfg: OptimizerConfigurator = proxy_optimizer
+        self.proxy_model = (
+            get_model(
+                mname=proxy_model,
+            )
+            if isinstance(proxy_model, str)
+            else proxy_model
+        )
 
         if "eta" in kwargs:
             self.hyper_params.update(eta=kwargs["eta"])
         else:
             self.hyper_params.update(eta=1.0)
+
+    @property
+    def proxy_optimizer(self) -> Optimizer:
+        """The optimizer of the client.
+
+        Warning:
+            If the optimizer is stored in the cache, the method retrieves it from the cache but does
+            not remove it. Thus, the performance may be affected if this property is used to get the
+            optimizer multiple times while the optimizer is in the cache.
+
+        Returns:
+            torch.optim.Optimizer: The optimizer.
+        """
+        if isinstance(self._modopt, FlukeCache.ObjectRef):
+            return retrieve_obj("_modopt", self, pop=False).optimizer
+        return self._modopt.optimizer
+
+    @proxy_optimizer.setter
+    def proxy_optimizer(self, optimizer: Optimizer) -> None:
+        self._modopt.optimizer = optimizer
+
+    @property
+    def proxy_scheduler(self) -> LRScheduler:
+        """The learning rate scheduler of the client.
+
+        Warning:
+            If the scheduler is stored in the cache, the method retrieves it from the cache but does
+            not remove it. Thus, the performance may be affected if this property is used to get the
+            scheduler multiple times while the scheduler is in the cache.
+
+        Returns:
+            torch.optim.lr_scheduler.LRScheduler: The learning rate scheduler.
+        """
+        if isinstance(self._modopt, FlukeCache.ObjectRef):
+            return retrieve_obj("_modopt", self, pop=False).scheduler
+        return self._modopt.scheduler
+
+    @proxy_scheduler.setter
+    def proxy_scheduler(self, scheduler: LRScheduler) -> None:
+        self._modopt.scheduler = scheduler
 
     def fit(self, override_local_epochs: int = 0) -> float:
         self.model.train()
@@ -309,6 +364,9 @@ class ProxyClient(AbstractDFLClient):
 
         if self.optimizer is None:
             self.optimizer, self.scheduler = self._optimizer_cfg(self.model)
+
+        if self.proxy_optimizer is None:
+            self.proxy_optimizer, self.proxy_scheduler = self._proxy_optimizer_cfg(self.proxy_model)
 
         loss_private = 0.0
         loss_proxy = 0.0
@@ -393,7 +451,10 @@ class ProxyClient(AbstractDFLClient):
             self.pushsum_weight += received_pushsum
 
             for key in proxy_state_dict.keys():
-                proxy_state_dict[key] += received_weights[key]
+                proxy_state_dict[key] += received_weights[key].to(
+                    device=proxy_state_dict[key].device,
+                    dtype=proxy_state_dict[key].dtype
+                )
 
         debiased_state_dict = {}
         for key in proxy_state_dict.keys():

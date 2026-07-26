@@ -25,9 +25,9 @@ from ...utils import (
     get_loss,
     get_model, get_class_from_qualified_name,
 )  # NOQA
-from .client import AbstractDFLClient, GossipClient  # NOQA
+from .client import AbstractDFLClient, GossipClient, ProxyClient  # NOQA
 
-__all__ = ["DecentralizedFL", "GossipDFL", "Topology", "client"]
+__all__ = ["DecentralizedFL", "GossipDFL", "Topology", "client", "ProxyDFL"]
 
 
 class Topology:
@@ -536,6 +536,55 @@ class GossipDFL(DecentralizedFL):
 
     def get_client_class(self) -> type[GossipClient]:
         return GossipClient
+
+    def run(self, n_rounds: int, *args, **kwargs) -> None:
+        with FlukeENV().get_live_renderer():
+            progress_fl = FlukeENV().get_progress_bar("FL")
+            progress_client = FlukeENV().get_progress_bar("clients")
+            client_x_round = int(self.n_clients)
+            task_rounds = progress_fl.add_task("[red]FL Rounds", total=n_rounds * client_x_round)
+            task_local = progress_client.add_task("[green]Local Training", total=client_x_round)
+
+            total_rounds = self.rounds + n_rounds
+            for rnd in range(self.rounds, total_rounds):
+                try:
+                    self.notify(event="start_round", round=rnd + 1, global_model=None)
+
+                    perm_idx = np.random.permutation(self.n_clients)
+                    for c, cid in enumerate(perm_idx):
+                        client = self.clients[cid]
+                        if client.is_active(rnd):
+                            client.local_update(rnd + 1)
+                            self._participants[rnd + 1].add(client.index)
+                        progress_client.update(task_id=task_local, completed=c + 1)
+                        progress_fl.update(task_id=task_rounds, advance=1)
+
+                    self._compute_evaluation(rnd + 1)
+                    self.notify(event="end_round", round=rnd + 1)
+                    self.rounds += 1
+
+                    path, freq, _ = FlukeENV().get_save_options()
+                    if freq > 0 and (rnd + 1) % freq == 0:
+                        self.save(path, rnd + 1)
+
+                except KeyboardInterrupt:
+                    self.notify(event="interrupted")
+                    break
+
+                except EarlyStopping:
+                    self.notify(event="early_stop", round=self.rounds + 1)
+                    break
+
+            progress_fl.remove_task(task_rounds)
+            progress_client.remove_task(task_local)
+
+        self.finalize()
+        self.notify(event="finished", round=self.rounds + 1)
+
+class ProxyDFL(DecentralizedFL):
+    """Proxy Decentralized Federated Learning (ProxyDFL) is a specific implementation of a"""
+    def get_client_class(self) -> type[ProxyClient]:
+        return ProxyClient
 
     def run(self, n_rounds: int, *args, **kwargs) -> None:
         with FlukeENV().get_live_renderer():
