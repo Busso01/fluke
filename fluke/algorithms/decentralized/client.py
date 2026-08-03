@@ -276,7 +276,7 @@ class ProxyClient(AbstractDFLClient):
         alpha (float): The DML weight for the KL divergence loss of the private model. Defaults to 0.5.
         beta (float): The DML weight for the KL divergence loss of the proxy model. Defaults to 0.5.
         noise_multiplier (float): The noise level for Differential Privacy applied to the proxy model. Defaults to 1.0.
-        **kwargs: Keyword arguments passed to the parent class .
+        **kwargs: Keyword arguments passed to the parent class.
 
     Raises:
         ImportError: If gradient clipping is enabled (clipping > 0) but the 'opacus' library is not installed.
@@ -351,7 +351,21 @@ class ProxyClient(AbstractDFLClient):
     def proxy_scheduler(self, scheduler: LRScheduler) -> None:
         self._modopt.scheduler = scheduler
 
+    def local_update(self, round: int) -> None:
+        super(AbstractDFLClient, self).local_update(round)
+
     def fit(self, override_local_epochs: int = 0) -> float:
+        """Client's local training procedure. This method trains the private model and the proxy model.
+
+                Args:
+                    override_local_epochs (int, optional): Overrides the number of local epochs,
+                        by default 0 (use the default number of local epochs as in
+                        ``hyper_params.local_epochs``).
+
+                Returns:
+                    float: The average loss of the private model during the training.
+                """
+
         self.model.train()
         self.proxy_model.train()
 

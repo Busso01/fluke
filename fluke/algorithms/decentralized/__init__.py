@@ -582,7 +582,13 @@ class GossipDFL(DecentralizedFL):
         self.notify(event="finished", round=self.rounds + 1)
 
 class ProxyDFL(DecentralizedFL):
-    """Proxy Decentralized Federated Learning (ProxyDFL) is a specific implementation of a"""
+    """Proxy Decentralized Federated Learning (ProxyDFL) is a specific implementation of a
+    decentralized FL algorithm where clients communicate with their neighbors by exchanging
+    shared proxy models to preserve the privacy of their private models.
+    In each round, active clients train both models using mutual learning, send
+    their proxy model and a PushSum weight to their neighbors, and then perform a de-biased
+    aggregation based on the received models to update their local proxy.
+    """
     def get_client_class(self) -> type[ProxyClient]:
         return ProxyClient
 
