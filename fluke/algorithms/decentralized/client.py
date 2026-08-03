@@ -1,5 +1,4 @@
 """This module implements clients for decentralized federated learning (DFL) algorithms."""
-
 from random import choice
 from typing import Generator, Literal
 
@@ -297,7 +296,7 @@ class ProxyClient(AbstractDFLClient):
         self.alpha = alpha
         self.beta = beta
         self.kl_loss = nn.KLDivLoss(reduction='batchmean')
-        self.pushsum_weight = 0.5
+        self.pushsum_weight = 1
         self._proxy_optimizer_cfg: OptimizerConfigurator = proxy_optimizer
         self.proxy_model = (
             get_model(
@@ -411,16 +410,15 @@ class ProxyClient(AbstractDFLClient):
         if not self.neighbours:
             return
 
-        out_degree = len(self.neighbours)
-        fraction = 1.0 / (out_degree + 1)
+        fraction = 1.0 / (len(self.neighbours) + 1)
 
         self.pushsum_weight *= fraction
 
         proxy_state_dict = self.proxy_model.state_dict()
         message_weights = {}
         for key, value in proxy_state_dict.items():
-            message_weights[key] = value.clone() * fraction
-            proxy_state_dict[key] = proxy_state_dict[key] * fraction
+            message_weights[key] = value * fraction * self.pushsum_weight
+            proxy_state_dict[key] = proxy_state_dict[key] * fraction * self.pushsum_weight
 
         self.proxy_model.load_state_dict(proxy_state_dict)
 
