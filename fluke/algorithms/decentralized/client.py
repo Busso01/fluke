@@ -6,6 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
+from opacus import PrivacyEngine
 from torch.nn import Module
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
@@ -16,7 +17,7 @@ from ...comm import TimedMessage, Message  # NOQA
 from ...config import OptimizerConfigurator  # NOQA
 from ...data import DataLoader, FastDataLoader  # NOQA
 from ...utils import clear_cuda_cache, get_model, retrieve_obj
-from ...utils.model import safe_load_state_dict, aggregate_models  # NOQA
+from ...utils.model import safe_load_state_dict, aggregate_models, ModOpt  # NOQA
 
 __all__ = ["AbstractDFLClient", "GossipClient", "ProxyClient"]
 
@@ -285,19 +286,20 @@ class ProxyClient(AbstractDFLClient):
     def __init__(
         self,
         *args,
-        alpha: float = 0.5,
         beta: float = 0.5,
+        alpha: float = 0.5,
         proxy_model: Module,
-        proxy_optimizer: OptimizerConfigurator,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
         self.alpha = alpha
         self.beta = beta
         self.kl_loss = nn.KLDivLoss(reduction='batchmean')
-        self.pushsum_weight = 1
-        self._proxy_optimizer_cfg: OptimizerConfigurator = proxy_optimizer
+        self.pushSum_weight = 1
+        self.noise_multiplier = kwargs.get("noise_multiplier", 1.0)
+        self._proxy_modopt: ModOpt = ModOpt()
+
         self.proxy_model = (
             get_model(
                 mname=proxy_model,
@@ -306,66 +308,60 @@ class ProxyClient(AbstractDFLClient):
             else proxy_model
         )
 
-        if "eta" in kwargs:
-            self.hyper_params.update(eta=kwargs["eta"])
-        else:
-            self.hyper_params.update(eta=1.0)
+        # if self.proxy_optimizer is None:
+        #     self.proxy_optimizer, self.proxy_scheduler = self._optimizer_cfg(self.proxy_model)
+        #
+        # if clipping > 0:
+        #     if PrivacyEngine is None:
+        #         raise ImportError(
+        #             "Gradient clipping is enabled (clipping > 0) but the 'opacus' library is not installed."
+        #         )
+        #     self.privacy_engine = PrivacyEngine()
+        #
+        #     (self.proxy_model, self.proxy_optimizer, self.train_set) = self.privacy_engine.make_private(
+        #         module = self.proxy_model,
+        #         optimizer= self.proxy_optimizer,
+        #         data_loader= self.train_set if isinstance(self.train_set, DataLoader) else self.train_set.as_dataloader(),
+        #         noise_multiplier= self.noise_multiplier,
+        #         max_grad_norm = clipping,
+        #     )
+        # else:
+        #     self.privacy_engine = None
+
+    @property
+    def proxy_model(self) -> torch.nn.Module:
+        if isinstance(self._modopt, FlukeCache.ObjectRef):
+            return retrieve_obj("_proxy_modopt", self, pop=False).model
+        return self._proxy_modopt.model
+
+    @proxy_model.setter
+    def proxy_model(self, model: torch.nn.Module) -> None:
+        self._proxy_modopt.model = model
 
     @property
     def proxy_optimizer(self) -> Optimizer:
-        """The optimizer of the client.
-
-        Warning:
-            If the optimizer is stored in the cache, the method retrieves it from the cache but does
-            not remove it. Thus, the performance may be affected if this property is used to get the
-            optimizer multiple times while the optimizer is in the cache.
-
-        Returns:
-            torch.optim.Optimizer: The optimizer.
-        """
         if isinstance(self._modopt, FlukeCache.ObjectRef):
-            return retrieve_obj("_modopt", self, pop=False).optimizer
-        return self._modopt.optimizer
+            return retrieve_obj("_proxy_modopt", self, pop=False).optimizer
+        return self._proxy_modopt.optimizer
 
     @proxy_optimizer.setter
     def proxy_optimizer(self, optimizer: Optimizer) -> None:
-        self._modopt.optimizer = optimizer
+        self._proxy_modopt.optimizer = optimizer
 
     @property
     def proxy_scheduler(self) -> LRScheduler:
-        """The learning rate scheduler of the client.
-
-        Warning:
-            If the scheduler is stored in the cache, the method retrieves it from the cache but does
-            not remove it. Thus, the performance may be affected if this property is used to get the
-            scheduler multiple times while the scheduler is in the cache.
-
-        Returns:
-            torch.optim.lr_scheduler.LRScheduler: The learning rate scheduler.
-        """
         if isinstance(self._modopt, FlukeCache.ObjectRef):
-            return retrieve_obj("_modopt", self, pop=False).scheduler
-        return self._modopt.scheduler
+            return retrieve_obj("_proxy_modopt", self, pop=False).scheduler
+        return self._proxy_modopt.scheduler
 
     @proxy_scheduler.setter
     def proxy_scheduler(self, scheduler: LRScheduler) -> None:
-        self._modopt.scheduler = scheduler
+        self._proxy_modopt.scheduler = scheduler
 
     def local_update(self, round: int) -> None:
         super(AbstractDFLClient, self).local_update(round)
 
     def fit(self, override_local_epochs: int = 0) -> float:
-        """Client's local training procedure. This method trains the private model and the proxy model.
-
-                Args:
-                    override_local_epochs (int, optional): Overrides the number of local epochs,
-                        by default 0 (use the default number of local epochs as in
-                        ``hyper_params.local_epochs``).
-
-                Returns:
-                    float: The average loss of the private model during the training.
-                """
-
         self.model.train()
         self.proxy_model.train()
 
@@ -379,7 +375,7 @@ class ProxyClient(AbstractDFLClient):
             self.optimizer, self.scheduler = self._optimizer_cfg(self.model)
 
         if self.proxy_optimizer is None:
-            self.proxy_optimizer, self.proxy_scheduler = self._proxy_optimizer_cfg(self.proxy_model)
+            self.proxy_optimizer, self.proxy_scheduler = self._optimizer_cfg(self.proxy_model)
 
         loss_private = 0.0
         loss_proxy = 0.0
@@ -426,19 +422,20 @@ class ProxyClient(AbstractDFLClient):
 
         fraction = 1.0 / (len(self.neighbours) + 1)
 
-        self.pushsum_weight *= fraction
+        self.pushSum_weight *= fraction
 
         proxy_state_dict = self.proxy_model.state_dict()
         message_weights = {}
+
         for key, value in proxy_state_dict.items():
-            message_weights[key] = value * fraction * self.pushsum_weight
-            proxy_state_dict[key] = proxy_state_dict[key] * fraction * self.pushsum_weight
+            message_weights[key] = value.clone() * fraction * self.pushSum_weight
+            proxy_state_dict[key] = proxy_state_dict[key] * fraction * self.pushSum_weight
 
         self.proxy_model.load_state_dict(proxy_state_dict)
 
         payload = {
             "proxy_weights": message_weights,
-            "pushsum_weight": self.pushsum_weight
+            "pushsum_weight": self.pushSum_weight
         }
 
         for neighbor in self.neighbours:
@@ -460,7 +457,7 @@ class ProxyClient(AbstractDFLClient):
             received_weights = payload["proxy_weights"]
             received_pushsum = payload["pushsum_weight"]
 
-            self.pushsum_weight += received_pushsum
+            self.pushSum_weight += received_pushsum
 
             for key in proxy_state_dict.keys():
                 proxy_state_dict[key] += received_weights[key].to(
@@ -470,6 +467,6 @@ class ProxyClient(AbstractDFLClient):
 
         debiased_state_dict = {}
         for key in proxy_state_dict.keys():
-            debiased_state_dict[key] = proxy_state_dict[key] / self.pushsum_weight
+            debiased_state_dict[key] = proxy_state_dict[key] / self.pushSum_weight
 
         self.proxy_model.load_state_dict(debiased_state_dict)
