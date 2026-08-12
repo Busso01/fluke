@@ -1,0 +1,18 @@
+hyperparameters:
+  client:
+    batch_size: 250
+    local_epochs: 1
+    loss: CrossEntropyLoss
+    persistency: true
+    clipping: 1.0
+    optimizer:
+      name: Adam
+      lr: 0.001
+      # momentum: 0.9
+      weight_decay: 0.0001
+    scheduler:
+      gamma: 0.995
+      step_size: 1
+  model: LeNet5
+
+name: fluke.algorithms.decentralized.DSpodFL
