@@ -1,6 +1,7 @@
 """This module implements clients for decentralized federated learning (DFL) algorithms."""
+import random
 from random import choice
-from typing import Generator, Literal
+from typing import Generator, Literal, List
 
 import numpy as np
 import torch
@@ -19,7 +20,7 @@ from ...data import DataLoader, FastDataLoader  # NOQA
 from ...utils import clear_cuda_cache, get_model, retrieve_obj
 from ...utils.model import safe_load_state_dict, aggregate_models, ModOpt  # NOQA
 
-__all__ = ["AbstractDFLClient", "GossipClient", "ProxyClient"]
+__all__ = ["AbstractDFLClient", "GossipClient", "ProxyClient", "DSpodClient"]
 
 
 class AbstractDFLClient(Client):
@@ -412,6 +413,8 @@ class ProxyClient(AbstractDFLClient):
 
                 self.optimizer.step()
                 self.proxy_optimizer.step()
+            self.scheduler.step()
+            self.proxy_scheduler.step()
 
         clear_cuda_cache()
         return loss_private
@@ -470,3 +473,70 @@ class ProxyClient(AbstractDFLClient):
             debiased_state_dict[key] = proxy_state_dict[key] / self.pushSum_weight
 
         self.proxy_model.load_state_dict(debiased_state_dict)
+
+class DSpodClient(AbstractDFLClient):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._neighbours_weights = None
+        self._aggregation_weights = {key: torch.zeros_like(val) for key, val in self.model.state_dict().items()}
+        self._run_update = 1
+        self._receive_model = 1
+
+
+    @property
+    def neighbours_weights(self) -> List[float]:
+        return self._neighbours_weights
+
+    @neighbours_weights.setter
+    def neighbours_weights(self, neighbours_weights: List[float]):
+        self._neighbours_weights = neighbours_weights
+
+    def set_neighbours_weights(self, neighbours_weights: List[float]):
+        """ Sets the neighbor weights
+        Args:
+            neighbours_weights: the weights of the neighbors to be set
+        """
+        self._neighbours_weights = neighbours_weights
+
+    def local_update(self, round: int) -> None:
+        self._run_update = random.choice([0, 1])
+
+        if self._run_update == 1:
+            super(AbstractDFLClient, self).local_update(round)
+            self._num_updates += 1
+
+        with torch.no_grad():
+            state_dict = self.model.state_dict()
+            for key in self.model.state_dict():
+                state_dict[key] = state_dict[key].float() + self._aggregation_weights[key]
+            self.model.load_state_dict(state_dict)
+        self.send_model()
+
+    def send_model(self) -> None:
+        if not self.neighbours:
+            return
+
+        for neighbor in self.neighbours:
+            self.channel.send(Message(
+                self.model, "model", self.index, inmemory=True,
+            ), neighbor)
+
+    def receive_model(self) -> None:
+        messages = self.channel.receive_all(self.index, "model")
+
+        if not messages:
+            return
+
+        state_dict = self.model.state_dict()
+        self._aggregation_weights = {key: torch.zeros_like(val) for key, val in state_dict.items()}
+        for msg in messages:
+            neighbour_model = msg.payload
+            self._receive_model = random.choice([0, 1])
+
+            if self._receive_model == 0:
+                continue
+
+            neighbour_state = neighbour_model.state_dict()
+            for key in self._aggregation_weights.keys():
+                diff = neighbour_state[key] - state_dict[key]
+                self._aggregation_weights[key] = self._aggregation_weights[key].float() + self._neighbours_weights[msg.sender] * diff
