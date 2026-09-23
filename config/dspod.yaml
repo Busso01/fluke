@@ -5,6 +5,9 @@ hyperparameters:
     loss: CrossEntropyLoss
     persistency: true
     clipping: 1.0
+    distribution_type: beta
+    alpha: 0.5
+    beta: 0.5
     optimizer:
       name: Adam
       lr: 0.001
