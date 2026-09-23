@@ -1,7 +1,7 @@
 """This module implements clients for decentralized federated learning (DFL) algorithms."""
 import random
 from random import choice
-from typing import Generator, Literal, List
+from typing import Generator, Literal, List, Dict
 
 import numpy as np
 import torch
@@ -475,13 +475,41 @@ class ProxyClient(AbstractDFLClient):
         self.proxy_model.load_state_dict(debiased_state_dict)
 
 class DSpodClient(AbstractDFLClient):
-    def __init__(self, *args, **kwargs):
+    def __init__(
+            self,
+            *args,
+            distribution_type: str = Literal["beta", "uniform"],
+            alpha: float = 0.5,
+            beta: float = 0.5,
+            low: float = 0.0,
+            high: float = 1.0 ,
+            **kwargs):
         super().__init__(*args, **kwargs)
+
         self._neighbours_weights = None
         self._aggregation_weights = {key: torch.zeros_like(val) for key, val in self.model.state_dict().items()}
         self._run_update = 1
         self._receive_model = 1
+        self.compute_prob: float = 1.0
+        self.comm_prob: Dict[int, float] = {}
 
+        assert distribution_type in ["beta", "uniform"], f"Invalid distribution type {distribution_type}."
+        if distribution_type == "beta":
+            self.compute_prob = np.random.beta(alpha, beta)
+            for neighbor in self.neighbours:
+                self.comm_prob[neighbor] = np.random.beta(alpha, beta)
+        elif distribution_type == "uniform":
+            self.compute_prob = np.random.uniform(low, high)
+            for neighbor in self.neighbours:
+                self.comm_prob[neighbor] = np.random.uniform(low, high)
+        else:
+            self.compute_prob = 1.0
+            for neighbor in self.neighbours:
+                self.comm_prob[neighbor] = 1.0
+
+        self.compute_prob = max(1e-3, self.compute_prob)
+        for k in self.comm_prob.keys():
+            self.comm_prob[k] = max(1e-3, self.comm_prob[k])
 
     @property
     def neighbours_weights(self) -> List[float]:
@@ -499,7 +527,7 @@ class DSpodClient(AbstractDFLClient):
         self._neighbours_weights = neighbours_weights
 
     def local_update(self, round: int) -> None:
-        self._run_update = random.choice([0, 1])
+        self._run_update = 1 if random.random() <= self.compute_prob else 0
 
         if self._run_update == 1:
             super(AbstractDFLClient, self).local_update(round)
@@ -531,7 +559,10 @@ class DSpodClient(AbstractDFLClient):
         self._aggregation_weights = {key: torch.zeros_like(val) for key, val in state_dict.items()}
         for msg in messages:
             neighbour_model = msg.payload
-            self._receive_model = random.choice([0, 1])
+            sender = msg.sender
+
+            link_prob = self.comm_prob.get(sender, 1.0)
+            self._receive_model = 1 if random.random() <= link_prob else 0
 
             if self._receive_model == 0:
                 continue

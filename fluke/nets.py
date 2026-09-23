@@ -47,6 +47,9 @@ __all__ = [
     "FEMNIST_CNN_D",
     "VGG9_E",
     "VGG9_D",
+    "VGG11",
+    "VGG11_E",
+    "VGG11_D",
     "VGG9",
     "ResNet18",
     "ResNet34",
@@ -930,6 +933,195 @@ class VGG9(EncoderHeadNet):
             VGG9_E(seed), VGG9_D(input_size=512, output_size=output_size, seed=seed)
         )
 
+class VGG11_E(nn.Module):
+    """Encoder for the :class:`VGG11` network.
+
+    Args:
+        seed (int, optional): Seed used for weight initialization. Defaults to 98765.
+
+    See Also:
+        - :class:`VGG11`
+        - :class:`VGG11_D`
+    """
+
+    @classmethod
+    def _conv_layer(
+            cls,
+            in_channels: int,
+            out_channels: int,
+            kernel_size: int,
+            stride: int = 1,
+            padding: int = 0,
+            groups: int = 1,
+            bias: bool = False,
+            seed: int = 0,
+    ) -> nn.Conv2d:
+        conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            groups=groups,
+            stride=stride,
+            bias=bias,
+        )
+        torch.manual_seed(seed)
+        torch.nn.init.xavier_normal_(conv.weight)
+        return conv
+
+    def __init__(self, seed: int = 98765):
+        super(VGG11_E, self).__init__()
+        self.encoder = nn.Sequential(
+            VGG11_E._conv_layer(
+                in_channels=3,
+                out_channels=64,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            VGG11_E._conv_layer(
+                in_channels=64,
+                out_channels=128,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            VGG11_E._conv_layer(
+                in_channels=128,
+                out_channels=256,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            VGG11_E._conv_layer(
+                in_channels=256,
+                out_channels=256,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            VGG11_E._conv_layer(
+                in_channels=256,
+                out_channels=512,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            VGG11_E._conv_layer(
+                in_channels=512,
+                out_channels=512,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            VGG11_E._conv_layer(
+                in_channels=512,
+                out_channels=512,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            VGG11_E._conv_layer(
+                in_channels=512,
+                out_channels=512,
+                kernel_size=3,
+                padding=1,
+                bias=False,
+                seed=seed,
+            ),
+            nn.ReLU(True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Flatten(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.encoder(x)
+
+
+class VGG11_D(nn.Module):
+    """Head for the :class:`VGG11` network.
+
+    Args:
+        input_size (int, optional): Size of the input tensor. Defaults to 512.
+        output_size (int, optional): Number of output classes. Defaults to 62.
+        seed (int, optional): Seed used for weight initialization. Defaults to 98765.
+
+    See Also:
+        - :class:`VGG11`
+        - :class:`VGG11_E`
+    """
+
+    @classmethod
+    def create_linear_layer(
+            cls, in_features: int, out_features: int, bias: bool = False, seed: int = 0
+    ) -> nn.Linear:
+        fc = nn.Linear(in_features, out_features, bias=bias)
+        torch.manual_seed(seed)
+        torch.nn.init.xavier_normal_(fc.weight)
+        if bias:
+            torch.nn.init.zeros_(fc.bias)
+        return fc
+
+    def __init__(self, input_size: int = 512, output_size: int = 10, seed: int = 98765):
+        super(VGG11_D, self).__init__()
+        self.downstream = nn.Sequential(
+            VGG11_D.create_linear_layer(
+                in_features=input_size, out_features=4096, bias=True, seed=seed
+            ),
+            nn.ReLU(True),
+            nn.Dropout(),
+            VGG11_D.create_linear_layer(
+                in_features=4096, out_features=4096, bias=True, seed=seed
+            ),
+            nn.ReLU(True),
+            nn.Dropout(),
+            VGG11_D.create_linear_layer(
+                in_features=4096, out_features=output_size, bias=True, seed=seed
+            ),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.downstream(x)
+
+
+# SuPerFed: https://arxiv.org/pdf/2109.07628v3.pdf (FEMNIST)
+class VGG11(EncoderHeadNet):
+    """VGG-11 network for CIFAR-10 classification. This network follows the standard
+    architecture of VGG-11 (8 convolutional layers and 3 fully connected layers).
+    The encoder consists of all the convolutional layers and the head network consists
+    of the dense layers.
+
+    Args:
+        output_size (int, optional): Number of output classes. Defaults to 10.
+        seed (int, optional): Seed used for weight initialization. Defaults to 98765.
+
+    See Also:
+        - :class:`VGG9_E`
+        - :class:`VGG9_D`
+    """
+
+    def __init__(self, output_size: int = 10, seed: int = 98765):
+        super(VGG11, self).__init__(
+            VGG11_E(seed), VGG11_D(input_size=512, output_size=output_size, seed=seed)
+        )
 
 # FedAvg: https://arxiv.org/pdf/1602.05629.pdf (CIFAR-10)
 # FedDyn: https://openreview.net/pdf?id=B7v4QMR6Z9w (CIFAR-10 and CIFAR-100)
