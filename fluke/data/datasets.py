@@ -441,14 +441,19 @@ class Datasets:
                 data through the data loader. Defaults to ``None``.
 
         Returns:
-            DataContainer: The CIFAR-100 dataset.
+            DataContainer: The FASHION_MNIST dataset.
         """
+
         train_data = datasets.FashionMNIST(root=path, train=True, download=True)
 
         test_data = datasets.FashionMNIST(root=path, train=False, download=True)
 
         train_data = _apply_transforms(train_data, transforms)
         test_data = _apply_transforms(test_data, transforms)
+
+        if transforms is None:
+            train_data.data = train_data.data / 255.0
+            train_data.data = train_data.data / 255.0
 
         return DataContainer(
             train_data.data,
