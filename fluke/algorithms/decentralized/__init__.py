@@ -143,6 +143,40 @@ class Topology:
         graph = networkx.barabasi_albert_graph(num_nodes, 1)
         return Topology(graph)
 
+    @staticmethod
+    def exponential(num_nodes: int) -> 'Topology':
+        """Create a static exponential topology graph with num_nodes nodes.
+
+        Args:
+            num_nodes (int): The number of nodes in the graph.
+
+        Returns:
+            Topology: An exponential topology graph.
+        """
+        import math
+        import networkx
+        
+        graph = networkx.DiGraph()
+        graph.add_nodes_from(range(num_nodes))
+        
+        max_power = math.floor(math.log2(num_nodes - 1)) if num_nodes > 1 else 0
+        
+        for i in range(num_nodes):
+            graph.add_edge(i, i)
+            
+            for r in range(max_power + 1):
+                step = 2 ** r
+                target_node = (i + step) % num_nodes
+                graph.add_edge(i, target_node)
+                
+        for i in range(num_nodes):
+            out_edges = list(graph.out_edges(i))
+            out_degree = len(out_edges)
+            for u, v in out_edges:
+                graph[u][v]['weight'] = 1.0 / out_degree
+                
+        return Topology(graph)
+
 
     def __init__(self, graph: networkx.Graph):
         self.graph: networkx.Graph = graph
