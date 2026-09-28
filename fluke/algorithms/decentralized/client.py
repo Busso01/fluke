@@ -534,6 +534,7 @@ class DSpodClient(AbstractDFLClient):
             self._num_updates += 1
 
         with torch.no_grad():
+            self._load_from_cache()
             state_dict = self.model.state_dict()
             for key in self.model.state_dict():
                 state_dict[key] = state_dict[key].float() + self._aggregation_weights[key]

@@ -694,7 +694,7 @@ class DSpodFL(DecentralizedFL):
                 client = self.clients[cid]
                 for n, nid in enumerate(client.neighbours):
                     neighbor = self.clients[nid]
-                    neighbors_weights[cid][nid] = 1.0 / 1.0 + max(len(client.neighbours), len(neighbor.neighbours))
+                    neighbors_weights[cid][nid] = 1.0 / (1.0 + max(len(client.neighbours), len(neighbor.neighbours)))
                 if isinstance(client, DSpodClient): client.set_neighbours_weights(neighbors_weights[cid])
 
             for rnd in range(self.rounds, total_rounds):
