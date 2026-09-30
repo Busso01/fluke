@@ -571,7 +571,7 @@ class GossipDFL(DecentralizedFL):
     def get_client_class(self) -> type[GossipClient]:
         return GossipClient
 
-    def run(self, n_rounds: int, *args, **kwargs) -> None:
+    def run(self, n_rounds: int, eligible_perc: float = 0.8, *args, **kwargs) -> None:
         with FlukeENV().get_live_renderer():
             progress_fl = FlukeENV().get_progress_bar("FL")
             progress_client = FlukeENV().get_progress_bar("clients")
@@ -587,7 +587,7 @@ class GossipDFL(DecentralizedFL):
                     perm_idx = np.random.permutation(self.n_clients)
                     for c, cid in enumerate(perm_idx):
                         client = self.clients[cid]
-                        if client.is_active(rnd):
+                        if client.is_active(eligible_perc, rnd):
                             client.local_update(rnd + 1)
                             self._participants[rnd + 1].add(client.index)
                         progress_client.update(task_id=task_local, completed=c + 1)
@@ -626,7 +626,7 @@ class ProxyDFL(DecentralizedFL):
     def get_client_class(self) -> type[ProxyClient]:
         return ProxyClient
 
-    def run(self, n_rounds: int, *args, **kwargs) -> None:
+    def run(self, n_rounds: int, eligible_perc: float = 0.8, *args, **kwargs) -> None:
         with FlukeENV().get_live_renderer():
             progress_fl = FlukeENV().get_progress_bar("FL")
             progress_client = FlukeENV().get_progress_bar("clients")
@@ -642,7 +642,7 @@ class ProxyDFL(DecentralizedFL):
                     perm_idx = np.random.permutation(self.n_clients)
                     for c, cid in enumerate(perm_idx):
                         client = self.clients[cid]
-                        if client.is_active(rnd):
+                        if client.is_active(eligible_perc, rnd):
                             client.local_update(rnd + 1)
                             self._participants[rnd + 1].add(client.index)
                         progress_client.update(task_id=task_local, completed=c + 1)
@@ -678,7 +678,7 @@ class DSpodFL(DecentralizedFL):
     def get_client_class(self) -> type[DSpodClient]:
         return DSpodClient
 
-    def run(self, n_rounds: int, *args, **kwargs) -> None:
+    def run(self, n_rounds: int, eligible_perc: float = 0.8, *args, **kwargs) -> None:
         with FlukeENV().get_live_renderer():
             progress_fl = FlukeENV().get_progress_bar("FL")
             progress_client = FlukeENV().get_progress_bar("clients")
@@ -703,7 +703,7 @@ class DSpodFL(DecentralizedFL):
                     perm_idx = np.random.permutation(self.n_clients)
                     for c, cid in enumerate(perm_idx):
                         client = self.clients[cid]
-                        if client.is_active(rnd):
+                        if client.is_active(eligible_perc, rnd):
                             client.local_update(rnd + 1)
                             self._participants[rnd + 1].add(client.index)
                         progress_client.update(task_id=task_local, completed=c + 1)
