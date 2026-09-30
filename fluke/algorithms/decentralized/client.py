@@ -77,29 +77,32 @@ class AbstractDFLClient(Client):
         self._num_updates: int = 0
         self._active_history: dict[int, bool] = {}
 
-    def is_active(self, iter: int) -> bool:
+    def is_active(self, p_stay_active: float, iter: int) -> bool:
         """Check if the client is active in the current iteration.
 
         Args:
+            p_stay_active (float): Probability of staying active if the client was active in the previous iteration.
             iter (int): The current iteration number.
 
         Returns:
             bool: True if the client is active, False otherwise.
         """
         if iter not in self._active_history:
-            if iter == 0 or (iter - 1) not in self._active_history:
-                is_now_active = np.random.rand() < self.hyper_params.activation_rate
-            else:
-                was_active = self._active_history[iter - 1]
-                p_stay_active = 0.80
-                p_wake_up = 0.20
-
-                if was_active:
-                    is_now_active = np.random.rand() < p_stay_active
+            if p_stay_active != 1.00:
+                if iter == 0 or (iter - 1) not in self._active_history:
+                    is_now_active = np.random.rand() < self.hyper_params.activation_rate
                 else:
-                    is_now_active = np.random.rand() < p_wake_up
+                    was_active = self._active_history[iter - 1]
+                    p_wake_up = 1 - p_stay_active
 
-            self._active_history[iter] = is_now_active
+                    if was_active:
+                        is_now_active = np.random.rand() < p_stay_active
+                    else:
+                        is_now_active = np.random.rand() < p_wake_up
+
+                self._active_history[iter] = is_now_active
+            else :
+                self._active_history[iter] = True
 
         return self._active_history[iter]
 
