@@ -1,4 +1,5 @@
 """This module implements clients for decentralized federated learning (DFL) algorithms."""
+import copy
 import random
 from random import choice
 from typing import Generator, Literal, List, Dict
@@ -532,16 +533,69 @@ class DSpodClient(AbstractDFLClient):
     def local_update(self, round: int) -> None:
         self._run_update = 1 if random.random() <= self.compute_prob else 0
 
+        self._load_from_cache()
+        self.receive_model()
+
         if self._run_update == 1:
-            super(AbstractDFLClient, self).local_update(round)
+            fluke_env = FlukeENV()
+            if fluke_env.is_parallel_client():
+                self._model_to_dataparallel()
+
+            if fluke_env.get_eval_cfg().pre_fit:
+                metrics = self.evaluate(fluke_env.get_evaluator(), self.test_set)
+                if metrics:
+                    self.notify(
+                        event="client_evaluation",
+                        round=round,
+                        client_id=self.index,
+                        phase="pre-fit",
+                        evals=metrics,
+                    )
+
+            self.notify("start_fit", round=round, client_id=self.index, model=self.model)
+
+            try:
+                loss = self.fit()
+            except KeyboardInterrupt:
+                if fluke_env.is_parallel_client():
+                    self._dataparallel_to_model()
+                self._check_persistency()
+                raise KeyboardInterrupt()
+
+            self._last_round = round
+
+            self.notify(
+                "end_fit",
+                round=round,
+                client_id=self.index,
+                model=self.model,
+                loss=loss,
+            )
+
+            if fluke_env.get_eval_cfg().post_fit:
+                metrics = self.evaluate(fluke_env.get_evaluator(), self.test_set)
+                if metrics:
+                    self.notify(
+                        event="client_evaluation",
+                        round=round,
+                        client_id=self.index,
+                        phase="post-fit",
+                        evals=metrics,
+                    )
+
+            if fluke_env.is_parallel_client():
+                self._dataparallel_to_model()
+
+            self._check_persistency()
             self._num_updates += 1
 
         with torch.no_grad():
-            self._load_from_cache()
             state_dict = self.model.state_dict()
             for key in self.model.state_dict():
                 state_dict[key] = state_dict[key].float() + self._aggregation_weights[key]
             self.model.load_state_dict(state_dict)
+
+        self._save_to_cache()
         self.send_model()
 
     def send_model(self) -> None:
@@ -550,7 +604,7 @@ class DSpodClient(AbstractDFLClient):
 
         for neighbor in self.neighbours:
             self.channel.send(Message(
-                self.model, "model", self.index, inmemory=True,
+                copy.deepcopy(self.model), "model", self.index, inmemory=True,
             ), neighbor)
 
     def receive_model(self) -> None:
@@ -562,8 +616,14 @@ class DSpodClient(AbstractDFLClient):
         state_dict = self.model.state_dict()
         self._aggregation_weights = {key: torch.zeros_like(val) for key, val in state_dict.items()}
         for msg in messages:
-            neighbour_model = msg.payload
+            try:
+                neighbour_model = msg.payload
+            except KeyError:
+                continue
             sender = msg.sender
+
+            if neighbour_model is None:
+                continue
 
             link_prob = self.comm_prob.get(sender, 1.0)
             self._receive_model = 1 if random.random() <= link_prob else 0
