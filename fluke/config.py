@@ -297,7 +297,7 @@ class Configuration(DDict):
                         "name": {
                             "type": "string",
                             "required": True,
-                            "allowed": ["fully_connected", "ring", "random", "tree", "custom", "exponential"]
+                            "allowed": ["fully_connected", "ring", "random", "tree", "custom", "exponential", "random_geometric"]
                         },
                         "topology_func": {
                             "type": "string",

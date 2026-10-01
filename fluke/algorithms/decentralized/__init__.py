@@ -177,6 +177,20 @@ class Topology:
                 
         return Topology(graph)
 
+    @staticmethod
+    def random_geometric(num_nodes: int, radius=0.4, **kwargs) -> Topology:
+        """Create a random geometric topology graph with num_nodes nodes and radius.
+
+                Args:
+                    num_nodes (int): The number of nodes in the graph.
+                    radius (float): The radius of the geometric graph.
+
+                Returns:
+                    Topology: An exponential topology graph.
+                """
+
+        return Topology(networkx.random_geometric_graph(num_nodes, radius))
+
 
     def __init__(self, graph: networkx.Graph):
         self.graph: networkx.Graph = graph
